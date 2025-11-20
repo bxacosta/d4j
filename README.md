@@ -36,6 +36,20 @@ Test the tool without making actual changes:
 
 In dry-run mode, the tool will show exactly what commands would be executed and which files would be copied, without actually running Maven or copying any files.
 
+### Re-run Last Execution
+
+Quickly re-run your last execution without going through the interactive prompts:
+
+```bash
+./d4j --last
+# or
+./d4j -l
+```
+
+This will execute the same profile, modules, and action from your previous run. The last execution is saved automatically in `config.json` after each successful run (not saved in dry-run mode).
+
+If no previous execution exists, you'll see an error message asking you to run the tool normally first.
+
 ## Configuration
 
 See `config.example.json` for structure.

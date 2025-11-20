@@ -18,10 +18,17 @@ import (
 // ============================================================================
 
 type Config struct {
-	ProjectPath string              `json:"project_path"`
-	DeployPath  string              `json:"deploy_path"`
-	Modules     map[string]Module   `json:"modules"`
-	Profiles    []Profile           `json:"profiles"`
+	ProjectPath   string              `json:"project_path"`
+	DeployPath    string              `json:"deploy_path"`
+	Modules       map[string]Module   `json:"modules"`
+	Profiles      []Profile           `json:"profiles"`
+	LastExecution *LastExecution      `json:"last_execution,omitempty"`
+}
+
+type LastExecution struct {
+	ProfileName     string   `json:"profile_name"`
+	SelectedModules []string `json:"selected_modules"`
+	Action          string   `json:"action"`
 }
 
 type Module struct {
@@ -66,6 +73,29 @@ func loadConfig(configPath string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+func saveConfig(configPath string, config *Config) error {
+	bytes, err := json.MarshalIndent(config, "", "    ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, bytes, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
+}
+
+func saveLastExecution(configPath string, config *Config, profileName string, selectedModules []string, action string) error {
+	config.LastExecution = &LastExecution{
+		ProfileName:     profileName,
+		SelectedModules: selectedModules,
+		Action:          action,
+	}
+
+	return saveConfig(configPath, config)
 }
 
 func resolveProfileModules(profile Profile, config *Config, processedProfiles map[string]bool) ([]string, error) {
@@ -356,6 +386,8 @@ func main() {
 	// Parse command line flags
 	dryRun := flag.Bool("dry-run", false, "Run in dry-run mode (show what would be done without executing)")
 	flag.BoolVar(dryRun, "d", false, "Run in dry-run mode (shorthand)")
+	last := flag.Bool("last", false, "Re-run the last execution")
+	flag.BoolVar(last, "l", false, "Re-run the last execution (shorthand)")
 	flag.Parse()
 
 	configPath := "config.json"
@@ -381,23 +413,50 @@ func main() {
 	}
 	fmt.Println()
 
-	// Run interactive form with backward navigation
-	formData, err := runInteractiveForm(config)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
+	var selectedProfileName string
+	var selectedModules []string
+	var selectedAction string
 
-	// Validate selections
-	if len(formData.SelectedModules) == 0 {
-		fmt.Println("No modules selected. Exiting.")
-		os.Exit(0)
+	// Check if re-running last execution
+	if *last {
+		if config.LastExecution == nil || len(config.LastExecution.SelectedModules) == 0 {
+			fmt.Println("Error: No previous execution found")
+			fmt.Println("Run the tool normally first to save an execution")
+			os.Exit(1)
+		}
+
+		fmt.Println("Re-running last execution:")
+		fmt.Printf("  Profile: %s\n", config.LastExecution.ProfileName)
+		fmt.Printf("  Modules: %s\n", strings.Join(config.LastExecution.SelectedModules, ", "))
+		fmt.Printf("  Action: %s\n", config.LastExecution.Action)
+		fmt.Println()
+
+		selectedProfileName = config.LastExecution.ProfileName
+		selectedModules = config.LastExecution.SelectedModules
+		selectedAction = config.LastExecution.Action
+	} else {
+		// Run interactive form with backward navigation
+		formData, err := runInteractiveForm(config)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Validate selections
+		if len(formData.SelectedModules) == 0 {
+			fmt.Println("No modules selected. Exiting.")
+			os.Exit(0)
+		}
+
+		selectedProfileName = formData.SelectedProfileName
+		selectedModules = formData.SelectedModules
+		selectedAction = formData.SelectedAction
 	}
 
 	// Find the selected profile
 	var selectedProfile *Profile
 	for _, p := range config.Profiles {
-		if p.Name == formData.SelectedProfileName {
+		if p.Name == selectedProfileName {
 			selectedProfile = &p
 			break
 		}
@@ -413,9 +472,16 @@ func main() {
 	deployPath := getEffectiveDeployPath(*selectedProfile, config)
 
 	// Execute action
-	if err := executeAction(formData.SelectedModules, config, Action(formData.SelectedAction), projectPath, deployPath, *dryRun); err != nil {
+	if err := executeAction(selectedModules, config, Action(selectedAction), projectPath, deployPath, *dryRun); err != nil {
 		fmt.Printf("\nError during execution: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Save last execution (only if not in dry-run mode and not already running last)
+	if !*dryRun && !*last {
+		if err := saveLastExecution(configPath, config, selectedProfileName, selectedModules, selectedAction); err != nil {
+			fmt.Printf("Warning: Failed to save last execution: %v\n", err)
+		}
 	}
 
 	if *dryRun {
