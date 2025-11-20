@@ -1,0 +1,34 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go build outputs
+d4j
+d4j.exe
+
+# Go test files
+*.test
+
+# Go coverage
+*.out
+*.prof
+
+# Configuration files (use config.example.json as template)
+config.json
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/

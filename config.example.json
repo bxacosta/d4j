@@ -1,0 +1,64 @@
+{
+    "project_path": "/path/to/your/java/project",
+    "deploy_path": "/path/to/jboss/standalone/deployments",
+    "modules": {
+        "core-ear": {
+            "base_path": "core/ear",
+            "artifact_file": "core/ear/target/core.ear"
+        },
+        "common-jar": {
+            "base_path": "common/lib",
+            "artifact_file": "common/lib/target/common.jar"
+        },
+        "utils-jar": {
+            "base_path": "utils",
+            "artifact_file": "utils/target/utils.jar"
+        },
+        "api-war": {
+            "base_path": "api/web",
+            "artifact_file": "api/web/target/api.war"
+        },
+        "services-ear": {
+            "base_path": "services/ear",
+            "artifact_file": "services/ear/target/services.ear"
+        },
+        "reports-ear": {
+            "base_path": "reports/ear",
+            "artifact_file": "reports/ear/target/reports.ear"
+        }
+    },
+    "profiles": [
+        {
+            "name": "BASE",
+            "project_path": "",
+            "deploy_path": "",
+            "modules": [
+                "core-ear",
+                "common-jar",
+                "utils-jar"
+            ]
+        },
+        {
+            "name": "SERVICES",
+            "modules": [
+                "$BASE$",
+                "services-ear",
+                "api-war"
+            ]
+        },
+        {
+            "name": "REPORTS",
+            "modules": [
+                "$BASE$",
+                "reports-ear"
+            ]
+        },
+        {
+            "name": "FULL",
+            "modules": [
+                "$SERVICES$",
+                "$REPORTS$"
+            ]
+        }
+    ]
+}
