@@ -130,73 +130,72 @@ func getEffectiveDeployPath(profile Profile, config *Config) string {
 // UX FUNCTIONS (HUH INTERACTIVE FORMS)
 // ============================================================================
 
-func selectProfile(profiles []Profile) (*Profile, error) {
-	if len(profiles) == 0 {
+type FormData struct {
+	SelectedProfileName string
+	SelectedModules     []string
+	SelectedAction      string
+}
+
+func runInteractiveForm(config *Config) (*FormData, error) {
+	if len(config.Profiles) == 0 {
 		return nil, fmt.Errorf("no profiles configured")
 	}
 
-	var selectedProfileName string
-	options := make([]huh.Option[string], len(profiles))
+	var formData FormData
 
-	for i, profile := range profiles {
-		options[i] = huh.NewOption(profile.Name, profile.Name)
+	// Build profile options
+	profileOptions := make([]huh.Option[string], len(config.Profiles))
+	for i, profile := range config.Profiles {
+		profileOptions[i] = huh.NewOption(profile.Name, profile.Name)
 	}
 
+	// Create multi-step form with backward navigation
 	form := huh.NewForm(
+		// Step 1: Select profile
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select a profile:").
-				Options(options...).
-				Value(&selectedProfileName),
+				Options(profileOptions...).
+				Value(&formData.SelectedProfileName),
 		),
-	)
 
-	if err := form.Run(); err != nil {
-		return nil, err
-	}
-
-	// Find and return the selected profile
-	for _, profile := range profiles {
-		if profile.Name == selectedProfileName {
-			return &profile, nil
-		}
-	}
-
-	return nil, fmt.Errorf("selected profile not found")
-}
-
-func selectModules(moduleNames []string) ([]string, error) {
-	if len(moduleNames) == 0 {
-		return nil, fmt.Errorf("no modules available")
-	}
-
-	var selectedModules []string
-	options := make([]huh.Option[string], len(moduleNames))
-
-	for i, moduleName := range moduleNames {
-		options[i] = huh.NewOption(moduleName, moduleName).Selected(true) // All selected by default
-	}
-
-	form := huh.NewForm(
+		// Step 2: Select modules (dynamic based on selected profile)
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title("Select modules to process:").
-				Options(options...).
-				Value(&selectedModules),
+				OptionsFunc(func() []huh.Option[string] {
+					// Find the selected profile
+					var selectedProfile *Profile
+					for _, p := range config.Profiles {
+						if p.Name == formData.SelectedProfileName {
+							selectedProfile = &p
+							break
+						}
+					}
+
+					if selectedProfile == nil {
+						return []huh.Option[string]{}
+					}
+
+					// Resolve modules for the selected profile
+					processedProfiles := make(map[string]bool)
+					resolvedModules, err := resolveProfileModules(*selectedProfile, config, processedProfiles)
+					if err != nil {
+						return []huh.Option[string]{}
+					}
+
+					// Build options with all selected by default
+					options := make([]huh.Option[string], len(resolvedModules))
+					for i, moduleName := range resolvedModules {
+						options[i] = huh.NewOption(moduleName, moduleName).Selected(true)
+					}
+
+					return options
+				}, &formData.SelectedProfileName). // Re-evaluate when profile changes
+				Value(&formData.SelectedModules),
 		),
-	)
 
-	if err := form.Run(); err != nil {
-		return nil, err
-	}
-
-	return selectedModules, nil
-}
-
-func selectAction() (Action, error) {
-	var selectedAction string
-
-	form := huh.NewForm(
+		// Step 3: Select action
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select action:").
@@ -205,15 +204,15 @@ func selectAction() (Action, error) {
 					huh.NewOption(string(ActionCompileOnly), string(ActionCompileOnly)),
 					huh.NewOption(string(ActionCopyOnly), string(ActionCopyOnly)),
 				).
-				Value(&selectedAction),
+				Value(&formData.SelectedAction),
 		),
 	)
 
 	if err := form.Run(); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return Action(selectedAction), nil
+	return &formData, nil
 }
 
 // ============================================================================
@@ -352,42 +351,30 @@ func main() {
 
 	fmt.Println("Configuration loaded successfully\n")
 
-	// Step 1: Select profile
-	selectedProfile, err := selectProfile(config.Profiles)
+	// Run interactive form with backward navigation
+	formData, err := runInteractiveForm(config)
 	if err != nil {
-		fmt.Printf("Error selecting profile: %v\n", err)
+		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Resolve profile modules (handle inheritance)
-	processedProfiles := make(map[string]bool)
-	resolvedModules, err := resolveProfileModules(*selectedProfile, config, processedProfiles)
-	if err != nil {
-		fmt.Printf("Error resolving profile modules: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(resolvedModules) == 0 {
-		fmt.Println("Error: Selected profile has no modules")
-		os.Exit(1)
-	}
-
-	// Step 2: Select modules
-	selectedModules, err := selectModules(resolvedModules)
-	if err != nil {
-		fmt.Printf("Error selecting modules: %v\n", err)
-		os.Exit(1)
-	}
-
-	if len(selectedModules) == 0 {
+	// Validate selections
+	if len(formData.SelectedModules) == 0 {
 		fmt.Println("No modules selected. Exiting.")
 		os.Exit(0)
 	}
 
-	// Step 3: Select action
-	selectedAction, err := selectAction()
-	if err != nil {
-		fmt.Printf("Error selecting action: %v\n", err)
+	// Find the selected profile
+	var selectedProfile *Profile
+	for _, p := range config.Profiles {
+		if p.Name == formData.SelectedProfileName {
+			selectedProfile = &p
+			break
+		}
+	}
+
+	if selectedProfile == nil {
+		fmt.Println("Error: Selected profile not found")
 		os.Exit(1)
 	}
 
@@ -396,7 +383,7 @@ func main() {
 	deployPath := getEffectiveDeployPath(*selectedProfile, config)
 
 	// Execute action
-	if err := executeAction(selectedModules, config, selectedAction, projectPath, deployPath); err != nil {
+	if err := executeAction(formData.SelectedModules, config, Action(formData.SelectedAction), projectPath, deployPath); err != nil {
 		fmt.Printf("\nError during execution: %v\n", err)
 		os.Exit(1)
 	}
