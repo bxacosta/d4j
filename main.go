@@ -237,7 +237,7 @@ func runInteractiveForm(config *Config) (*FormData, error) {
 				).
 				Value(&formData.SelectedAction),
 		),
-	)
+	).WithTheme(huh.ThemeBase())
 
 	if err := form.Run(); err != nil {
 		return nil, err
