@@ -3,7 +3,7 @@
     "deploy_path": "/path/to/jboss/standalone/deployments",
     "modules": {
         "core-ear": {
-            "base_path": "core/ear",
+            "base_path": "core",
             "artifact_file": "core/ear/target/core.ear"
         },
         "common-jar": {
@@ -15,15 +15,15 @@
             "artifact_file": "utils/target/utils.jar"
         },
         "api-war": {
-            "base_path": "api/web",
+            "base_path": "api",
             "artifact_file": "api/web/target/api.war"
         },
         "services-ear": {
-            "base_path": "services/ear",
+            "base_path": "services",
             "artifact_file": "services/ear/target/services.ear"
         },
         "reports-ear": {
-            "base_path": "reports/ear",
+            "base_path": "reports",
             "artifact_file": "reports/ear/target/reports.ear"
         }
     },

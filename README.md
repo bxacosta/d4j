@@ -16,11 +16,25 @@ CLI tool for compiling and deploying Java EE modules to JBoss.
 
 ## Usage
 
+### Normal Mode
+
 Run `./d4j` and follow the interactive prompts:
 
 1. Select a profile
 2. Select modules to process
 3. Choose action (Copy Only / Compile Only / Compile and Copy)
+
+### Dry-Run Mode
+
+Test the tool without making actual changes:
+
+```bash
+./d4j --dry-run
+# or
+./d4j -d
+```
+
+In dry-run mode, the tool will show exactly what commands would be executed and which files would be copied, without actually running Maven or copying any files.
 
 ## Configuration
 
@@ -37,9 +51,6 @@ Use `$PROFILE_NAME$` to include modules from another profile:
 }
 ```
 
-## Navigation
+## License
 
-- Arrow keys / j/k: Navigate
-- Space: Toggle selection
-- Enter: Confirm
-- Ctrl+C: Exit
+This project is licensed under the [MIT License](LICENSE).

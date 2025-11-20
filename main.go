@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -219,8 +220,15 @@ func runInteractiveForm(config *Config) (*FormData, error) {
 // EXECUTION FUNCTIONS
 // ============================================================================
 
-func compileModule(moduleName string, module Module, projectPath string) error {
+func compileModule(moduleName string, module Module, projectPath string, dryRun bool) error {
 	fullBasePath := filepath.Join(projectPath, module.BasePath)
+
+	if dryRun {
+		fmt.Printf("[DRY-RUN] Would compile %s\n", moduleName)
+		fmt.Printf("  Command: mvn clean install -DskipTests\n")
+		fmt.Printf("  Working directory: %s\n", fullBasePath)
+		return nil
+	}
 
 	fmt.Printf("[COMPILING] %s...\n", moduleName)
 
@@ -247,8 +255,17 @@ func compileModule(moduleName string, module Module, projectPath string) error {
 	return nil
 }
 
-func copyArtifact(moduleName string, module Module, projectPath string, deployPath string) error {
+func copyArtifact(moduleName string, module Module, projectPath string, deployPath string, dryRun bool) error {
 	fullArtifactPath := filepath.Join(projectPath, module.ArtifactFile)
+	artifactName := filepath.Base(fullArtifactPath)
+	destPath := filepath.Join(deployPath, artifactName)
+
+	if dryRun {
+		fmt.Printf("[DRY-RUN] Would copy %s\n", moduleName)
+		fmt.Printf("  Source: %s\n", fullArtifactPath)
+		fmt.Printf("  Destination: %s\n", destPath)
+		return nil
+	}
 
 	fmt.Printf("[COPYING] %s...\n", moduleName)
 
@@ -256,10 +273,6 @@ func copyArtifact(moduleName string, module Module, projectPath string, deployPa
 	if _, err := os.Stat(fullArtifactPath); os.IsNotExist(err) {
 		return fmt.Errorf("artifact file does not exist: %s", fullArtifactPath)
 	}
-
-	// Get the artifact filename
-	artifactName := filepath.Base(fullArtifactPath)
-	destPath := filepath.Join(deployPath, artifactName)
 
 	// Create deploy directory if it doesn't exist
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
@@ -287,12 +300,16 @@ func copyArtifact(moduleName string, module Module, projectPath string, deployPa
 	return nil
 }
 
-func executeAction(selectedModules []string, config *Config, action Action, projectPath string, deployPath string) error {
+func executeAction(selectedModules []string, config *Config, action Action, projectPath string, deployPath string, dryRun bool) error {
 	successCount := 0
 	totalCount := len(selectedModules)
 
 	fmt.Println("\n" + strings.Repeat("=", 50))
-	fmt.Println("Starting execution...")
+	if dryRun {
+		fmt.Println("DRY-RUN MODE - No actual changes will be made")
+	} else {
+		fmt.Println("Starting execution...")
+	}
 	fmt.Println(strings.Repeat("=", 50) + "\n")
 
 	for _, moduleName := range selectedModules {
@@ -303,14 +320,14 @@ func executeAction(selectedModules []string, config *Config, action Action, proj
 
 		// Compile if needed
 		if action == ActionCompileOnly || action == ActionCompileAndCopy {
-			if err := compileModule(moduleName, module, projectPath); err != nil {
+			if err := compileModule(moduleName, module, projectPath, dryRun); err != nil {
 				return err // Stop on first error as per requirements
 			}
 		}
 
 		// Copy if needed
 		if action == ActionCopyOnly || action == ActionCompileAndCopy {
-			if err := copyArtifact(moduleName, module, projectPath, deployPath); err != nil {
+			if err := copyArtifact(moduleName, module, projectPath, deployPath, dryRun); err != nil {
 				return err // Stop on first error as per requirements
 			}
 		}
@@ -321,7 +338,11 @@ func executeAction(selectedModules []string, config *Config, action Action, proj
 
 	// Print summary
 	fmt.Println(strings.Repeat("=", 50))
-	fmt.Printf("Summary: %d/%d modules processed successfully\n", successCount, totalCount)
+	if dryRun {
+		fmt.Printf("DRY-RUN Summary: %d/%d modules would be processed\n", successCount, totalCount)
+	} else {
+		fmt.Printf("Summary: %d/%d modules processed successfully\n", successCount, totalCount)
+	}
 	fmt.Println(strings.Repeat("=", 50))
 
 	return nil
@@ -332,6 +353,11 @@ func executeAction(selectedModules []string, config *Config, action Action, proj
 // ============================================================================
 
 func main() {
+	// Parse command line flags
+	dryRun := flag.Bool("dry-run", false, "Run in dry-run mode (show what would be done without executing)")
+	flag.BoolVar(dryRun, "d", false, "Run in dry-run mode (shorthand)")
+	flag.Parse()
+
 	configPath := "config.json"
 
 	// Load configuration
@@ -349,7 +375,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Configuration loaded successfully\n")
+	fmt.Println("Configuration loaded successfully")
+	if *dryRun {
+		fmt.Println("Running in DRY-RUN mode - no actual changes will be made")
+	}
+	fmt.Println()
 
 	// Run interactive form with backward navigation
 	formData, err := runInteractiveForm(config)
@@ -383,10 +413,14 @@ func main() {
 	deployPath := getEffectiveDeployPath(*selectedProfile, config)
 
 	// Execute action
-	if err := executeAction(formData.SelectedModules, config, Action(formData.SelectedAction), projectPath, deployPath); err != nil {
+	if err := executeAction(formData.SelectedModules, config, Action(formData.SelectedAction), projectPath, deployPath, *dryRun); err != nil {
 		fmt.Printf("\nError during execution: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("\nExecution completed successfully!")
+	if *dryRun {
+		fmt.Println("\nDry-run completed successfully!")
+	} else {
+		fmt.Println("\nExecution completed successfully!")
+	}
 }
