@@ -33,31 +33,31 @@
             "project_path": "",
             "deploy_path": "",
             "modules": [
-                "core-ear",
-                "common-jar",
-                "utils-jar"
+                {"name": "core-ear"},
+                {"name": "common-jar"},
+                {"name": "utils-jar"}
             ]
         },
         {
             "name": "SERVICES",
             "modules": [
-                "$BASE$",
-                "services-ear",
-                "api-war"
+                {"name": "$BASE$"},
+                {"name": "services-ear"},
+                {"name": "api-war", "deploy_path": "/custom/deploy/path"}
             ]
         },
         {
             "name": "REPORTS",
             "modules": [
-                "$BASE$",
-                "reports-ear"
+                {"name": "$BASE$", "deploy_path": "/another/deploy/path"},
+                {"name": "reports-ear"}
             ]
         },
         {
             "name": "FULL",
             "modules": [
-                "$SERVICES$",
-                "$REPORTS$"
+                {"name": "$SERVICES$"},
+                {"name": "$REPORTS$"}
             ]
         }
     ]

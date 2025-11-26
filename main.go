@@ -26,9 +26,9 @@ type Config struct {
 }
 
 type LastExecution struct {
-	ProfileName     string   `json:"profile_name"`
-	SelectedModules []string `json:"selected_modules"`
-	Action          string   `json:"action"`
+	ProfileName     string          `json:"profile_name"`
+	SelectedModules []ProfileModule `json:"selected_modules"`
+	Action          string          `json:"action"`
 }
 
 type Module struct {
@@ -36,11 +36,16 @@ type Module struct {
 	ArtifactFile string `json:"artifact_file"`
 }
 
+type ProfileModule struct {
+	Name       string `json:"name"`
+	DeployPath string `json:"deploy_path,omitempty"`
+}
+
 type Profile struct {
-	Name        string   `json:"name"`
-	ProjectPath string   `json:"project_path"`
-	DeployPath  string   `json:"deploy_path"`
-	Modules     []string `json:"modules"`
+	Name        string          `json:"name"`
+	ProjectPath string          `json:"project_path"`
+	DeployPath  string          `json:"deploy_path"`
+	Modules     []ProfileModule `json:"modules"`
 }
 
 type Action string
@@ -88,7 +93,7 @@ func saveConfig(configPath string, config *Config) error {
 	return nil
 }
 
-func saveLastExecution(configPath string, config *Config, profileName string, selectedModules []string, action string) error {
+func saveLastExecution(configPath string, config *Config, profileName string, selectedModules []ProfileModule, action string) error {
 	config.LastExecution = &LastExecution{
 		ProfileName:     profileName,
 		SelectedModules: selectedModules,
@@ -98,18 +103,18 @@ func saveLastExecution(configPath string, config *Config, profileName string, se
 	return saveConfig(configPath, config)
 }
 
-func resolveProfileModules(profile Profile, config *Config, processedProfiles map[string]bool) ([]string, error) {
+func resolveProfileModules(profile Profile, config *Config, processedProfiles map[string]bool) ([]ProfileModule, error) {
 	if processedProfiles[profile.Name] {
 		return nil, fmt.Errorf("circular profile reference detected: %s", profile.Name)
 	}
 	processedProfiles[profile.Name] = true
 
-	var resolvedModules []string
+	var resolvedModules []ProfileModule
 
-	for _, moduleName := range profile.Modules {
+	for _, profileModule := range profile.Modules {
 		// Check if it's a profile reference ($PROFILE_NAME$)
-		if strings.HasPrefix(moduleName, "$") && strings.HasSuffix(moduleName, "$") {
-			referencedProfileName := strings.Trim(moduleName, "$")
+		if strings.HasPrefix(profileModule.Name, "$") && strings.HasSuffix(profileModule.Name, "$") {
+			referencedProfileName := strings.Trim(profileModule.Name, "$")
 
 			// Find the referenced profile
 			var referencedProfile *Profile
@@ -130,13 +135,20 @@ func resolveProfileModules(profile Profile, config *Config, processedProfiles ma
 				return nil, err
 			}
 
+			// If the current profileModule has a deploy_path, override it for all inherited modules
+			if profileModule.DeployPath != "" {
+				for i := range referencedModules {
+					referencedModules[i].DeployPath = profileModule.DeployPath
+				}
+			}
+
 			resolvedModules = append(resolvedModules, referencedModules...)
 		} else {
 			// It's a regular module
-			if _, exists := config.Modules[moduleName]; !exists {
-				return nil, fmt.Errorf("module not found in config: %s", moduleName)
+			if _, exists := config.Modules[profileModule.Name]; !exists {
+				return nil, fmt.Errorf("module not found in config: %s", profileModule.Name)
 			}
-			resolvedModules = append(resolvedModules, moduleName)
+			resolvedModules = append(resolvedModules, profileModule)
 		}
 	}
 
@@ -157,13 +169,29 @@ func getEffectiveDeployPath(profile Profile, config *Config) string {
 	return config.DeployPath
 }
 
+func getEffectiveModuleDeployPath(profileModule ProfileModule, profile Profile, config *Config) string {
+	// Level 1: Module-specific deploy path (most specific)
+	if profileModule.DeployPath != "" {
+		return profileModule.DeployPath
+	}
+
+	// Level 2: Profile deploy path
+	if profile.DeployPath != "" {
+		return profile.DeployPath
+	}
+
+	// Level 3: Global deploy path (least specific)
+	return config.DeployPath
+}
+
 // ============================================================================
 // UX FUNCTIONS (HUH INTERACTIVE FORMS)
 // ============================================================================
 
 type FormData struct {
 	SelectedProfileName string
-	SelectedModules     []string
+	SelectedModuleNames []string
+	SelectedModules     []ProfileModule
 	SelectedAction      string
 }
 
@@ -217,13 +245,13 @@ func runInteractiveForm(config *Config) (*FormData, error) {
 
 					// Build options with all selected by default
 					options := make([]huh.Option[string], len(resolvedModules))
-					for i, moduleName := range resolvedModules {
-						options[i] = huh.NewOption(moduleName, moduleName).Selected(true)
+					for i, profileModule := range resolvedModules {
+						options[i] = huh.NewOption(profileModule.Name, profileModule.Name).Selected(true)
 					}
 
 					return options
 				}, &formData.SelectedProfileName). // Re-evaluate when profile changes
-				Value(&formData.SelectedModules),
+				Value(&formData.SelectedModuleNames),
 		),
 
 		// Step 3: Select action
@@ -241,6 +269,36 @@ func runInteractiveForm(config *Config) (*FormData, error) {
 
 	if err := form.Run(); err != nil {
 		return nil, err
+	}
+
+	// Convert selected module names to ProfileModule objects
+	var selectedProfile *Profile
+	for _, p := range config.Profiles {
+		if p.Name == formData.SelectedProfileName {
+			selectedProfile = &p
+			break
+		}
+	}
+
+	if selectedProfile == nil {
+		return nil, fmt.Errorf("selected profile not found")
+	}
+
+	// Resolve modules for the selected profile
+	processedProfiles := make(map[string]bool)
+	resolvedModules, err := resolveProfileModules(*selectedProfile, config, processedProfiles)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to only include selected modules
+	for _, selectedName := range formData.SelectedModuleNames {
+		for _, profileModule := range resolvedModules {
+			if profileModule.Name == selectedName {
+				formData.SelectedModules = append(formData.SelectedModules, profileModule)
+				break
+			}
+		}
 	}
 
 	return &formData, nil
@@ -330,7 +388,7 @@ func copyArtifact(moduleName string, module Module, projectPath string, deployPa
 	return nil
 }
 
-func executeAction(selectedModules []string, config *Config, action Action, projectPath string, deployPath string, dryRun bool) error {
+func executeAction(selectedModules []ProfileModule, config *Config, action Action, profile Profile, projectPath string, dryRun bool) error {
 	successCount := 0
 	totalCount := len(selectedModules)
 
@@ -342,22 +400,25 @@ func executeAction(selectedModules []string, config *Config, action Action, proj
 	}
 	fmt.Println(strings.Repeat("=", 50) + "\n")
 
-	for _, moduleName := range selectedModules {
-		module, exists := config.Modules[moduleName]
+	for _, profileModule := range selectedModules {
+		module, exists := config.Modules[profileModule.Name]
 		if !exists {
-			return fmt.Errorf("module not found in config: %s", moduleName)
+			return fmt.Errorf("module not found in config: %s", profileModule.Name)
 		}
+
+		// Get the effective deploy path for this module
+		moduleDeployPath := getEffectiveModuleDeployPath(profileModule, profile, config)
 
 		// Compile if needed
 		if action == ActionCompileOnly || action == ActionCompileAndCopy {
-			if err := compileModule(moduleName, module, projectPath, dryRun); err != nil {
+			if err := compileModule(profileModule.Name, module, projectPath, dryRun); err != nil {
 				return err // Stop on first error as per requirements
 			}
 		}
 
 		// Copy if needed
 		if action == ActionCopyOnly || action == ActionCompileAndCopy {
-			if err := copyArtifact(moduleName, module, projectPath, deployPath, dryRun); err != nil {
+			if err := copyArtifact(profileModule.Name, module, projectPath, moduleDeployPath, dryRun); err != nil {
 				return err // Stop on first error as per requirements
 			}
 		}
@@ -414,7 +475,7 @@ func main() {
 	fmt.Println()
 
 	var selectedProfileName string
-	var selectedModules []string
+	var selectedModules []ProfileModule
 	var selectedAction string
 
 	// Check if re-running last execution
@@ -425,9 +486,15 @@ func main() {
 			os.Exit(1)
 		}
 
+		// Build module names list for display
+		moduleNames := make([]string, len(config.LastExecution.SelectedModules))
+		for i, pm := range config.LastExecution.SelectedModules {
+			moduleNames[i] = pm.Name
+		}
+
 		fmt.Println("Re-running last execution:")
 		fmt.Printf("  Profile: %s\n", config.LastExecution.ProfileName)
-		fmt.Printf("  Modules: %s\n", strings.Join(config.LastExecution.SelectedModules, ", "))
+		fmt.Printf("  Modules: %s\n", strings.Join(moduleNames, ", "))
 		fmt.Printf("  Action: %s\n", config.LastExecution.Action)
 		fmt.Println()
 
@@ -467,12 +534,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Get effective paths
+	// Get effective project path
 	projectPath := getEffectiveProjectPath(*selectedProfile, config)
-	deployPath := getEffectiveDeployPath(*selectedProfile, config)
 
 	// Execute action
-	if err := executeAction(selectedModules, config, Action(selectedAction), projectPath, deployPath, *dryRun); err != nil {
+	if err := executeAction(selectedModules, config, Action(selectedAction), *selectedProfile, projectPath, *dryRun); err != nil {
 		fmt.Printf("\nError during execution: %v\n", err)
 		os.Exit(1)
 	}
