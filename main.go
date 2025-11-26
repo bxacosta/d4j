@@ -319,6 +319,7 @@ func compileModule(moduleName string, module Module, projectPath string, dryRun 
 	}
 
 	fmt.Printf("[COMPILING] %s...\n", moduleName)
+	fmt.Println(strings.Repeat("-", 50))
 
 	// Check if path exists
 	if _, err := os.Stat(fullBasePath); os.IsNotExist(err) {
@@ -329,16 +330,19 @@ func compileModule(moduleName string, module Module, projectPath string, dryRun 
 	cmd := exec.Command("mvn", "clean", "install", "-DskipTests")
 	cmd.Dir = fullBasePath
 
-	// Capture output but don't display it unless there's an error
-	output, err := cmd.CombinedOutput()
+	// Show Maven output in real-time
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err := cmd.Run()
 
 	if err != nil {
+		fmt.Println(strings.Repeat("-", 50))
 		fmt.Printf("[FAILED] %s compilation failed\n", moduleName)
-		fmt.Println("\nMaven output:")
-		fmt.Println(string(output))
 		return fmt.Errorf("compilation failed for module %s: %w", moduleName, err)
 	}
 
+	fmt.Println(strings.Repeat("-", 50))
 	fmt.Printf("[SUCCESS] %s compiled successfully\n", moduleName)
 	return nil
 }
