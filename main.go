@@ -506,6 +506,35 @@ func compileModule(moduleName string, modulePath string, dryRun bool) error {
 	return nil
 }
 
+// cleanJBossMarkerFiles removes JBoss deployment marker files for a given artifact
+func cleanJBossMarkerFiles(destPath string, dryRun bool) {
+	jbossMarkers := []string{".failed", ".isdeploying", ".deployed", ".undeploying", ".skipdeploy", ".dodeploy"}
+
+	for _, marker := range jbossMarkers {
+		markerPath := destPath + marker
+		normalizedPath := filepath.FromSlash(markerPath)
+
+		// Check if marker file exists
+		if _, err := os.Stat(markerPath); err != nil {
+			continue // File doesn't exist, skip
+		}
+
+		// Dry-run mode: just show what would be removed
+		if dryRun {
+			fmt.Printf("  Would remove: %s\n", normalizedPath)
+			continue
+		}
+
+		// Remove the marker file
+		if err := os.Remove(markerPath); err != nil {
+			fmt.Printf("  Warning: Could not remove %s: %v\n", normalizedPath, err)
+			continue
+		}
+
+		fmt.Printf("  Removed: %s\n", normalizedPath)
+	}
+}
+
 func copyArtifact(moduleName string, artifactFilePath string, deployPath string, dryRun bool) error {
 	artifactName := filepath.Base(artifactFilePath)
 	destPath := filepath.Join(deployPath, artifactName)
@@ -518,6 +547,7 @@ func copyArtifact(moduleName string, artifactFilePath string, deployPath string,
 		fmt.Printf("[DRY-RUN] Would copy %s\n", moduleName)
 		fmt.Printf("  Source: %s\n", normalizedSource)
 		fmt.Printf("  Destination: %s\n", normalizedDest)
+		cleanJBossMarkerFiles(destPath, dryRun)
 		return nil
 	}
 
@@ -535,6 +565,9 @@ func copyArtifact(moduleName string, artifactFilePath string, deployPath string,
 	if err := os.MkdirAll(deployPath, 0755); err != nil {
 		return fmt.Errorf("failed to create deploy directory: %w", err)
 	}
+
+	// Clean up JBoss marker files before copying
+	cleanJBossMarkerFiles(destPath, dryRun)
 
 	// Copy the file
 	sourceFile, err := os.Open(artifactFilePath)
