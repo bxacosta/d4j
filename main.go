@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -18,7 +19,8 @@ import (
 // ============================================================================
 
 type Config struct {
-	ProjectPath   string              `json:"project_path"`
+	ProjectHome   string              `json:"project_home"`
+	JBossHome     string              `json:"jboss_home"`
 	DeployPath    string              `json:"deploy_path"`
 	Modules       map[string]Module   `json:"modules"`
 	Profiles      []Profile           `json:"profiles"`
@@ -32,8 +34,9 @@ type LastExecution struct {
 }
 
 type Module struct {
-	BasePath     string `json:"base_path"`
+	ModulePath   string `json:"module_path"`
 	ArtifactFile string `json:"artifact_file"`
+	DeployPath   string `json:"deploy_path,omitempty"`
 }
 
 type ProfileModule struct {
@@ -42,10 +45,8 @@ type ProfileModule struct {
 }
 
 type Profile struct {
-	Name        string          `json:"name"`
-	ProjectPath string          `json:"project_path"`
-	DeployPath  string          `json:"deploy_path"`
-	Modules     []ProfileModule `json:"modules"`
+	Name    string          `json:"name"`
+	Modules []ProfileModule `json:"modules"`
 }
 
 type Action string
@@ -77,6 +78,11 @@ func loadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config JSON: %w", err)
 	}
 
+	// Validate and resolve global deploy_path
+	if err := validateVariables(&config); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
+
 	return &config, nil
 }
 
@@ -101,6 +107,81 @@ func saveLastExecution(configPath string, config *Config, profileName string, se
 	}
 
 	return saveConfig(configPath, config)
+}
+
+// resolveVariables resolves all $VAR_NAME$ patterns in a string
+// Supports nested variables (e.g., deploy_path = "$jboss_home$/deployments")
+// Returns error if circular references detected or variable not found
+func resolveVariables(value string, varMap map[string]string) (string, error) {
+	const maxIterations = 10 // Prevent infinite loops
+	result := value
+
+	for i := 0; i < maxIterations; i++ {
+		// Find all $VAR$ patterns
+		matches := regexp.MustCompile(`\$([^$]+)\$`).FindAllStringSubmatch(result, -1)
+		if len(matches) == 0 {
+			return result, nil // No more variables to resolve
+		}
+
+		hasReplacement := false
+		for _, match := range matches {
+			fullMatch := match[0] // e.g., "$project_home$"
+			varName := match[1]   // e.g., "project_home"
+
+			replacement, exists := varMap[varName]
+			if !exists {
+				return "", fmt.Errorf("variable not found: %s", varName)
+			}
+
+			result = strings.ReplaceAll(result, fullMatch, replacement)
+			hasReplacement = true
+		}
+
+		if !hasReplacement {
+			break
+		}
+	}
+
+	// Check if still contains variables (circular reference)
+	if strings.Contains(result, "$") {
+		return "", fmt.Errorf("circular reference or unresolved variable in: %s", value)
+	}
+
+	return result, nil
+}
+
+// buildVariableMap creates a map of variable names to values from config
+func buildVariableMap(config *Config) map[string]string {
+	return map[string]string{
+		"project_home": config.ProjectHome,
+		"jboss_home":   config.JBossHome,
+		"deploy_path":  config.DeployPath,
+	}
+}
+
+// validateVariables ensures all required global variables are set
+func validateVariables(config *Config) error {
+	if config.ProjectHome == "" {
+		return fmt.Errorf("project_home is required")
+	}
+	if config.JBossHome == "" {
+		return fmt.Errorf("jboss_home is required")
+	}
+	if config.DeployPath == "" {
+		return fmt.Errorf("deploy_path is required")
+	}
+
+	// Validate global deploy_path can be resolved
+	varMap := buildVariableMap(config)
+	resolved, err := resolveVariables(config.DeployPath, varMap)
+	if err != nil {
+		return fmt.Errorf("failed to resolve global deploy_path: %w", err)
+	}
+
+	// Update config with resolved value for efficiency
+	config.DeployPath = resolved
+
+	return nil
 }
 
 func resolveProfileModules(profile Profile, config *Config, processedProfiles map[string]bool) ([]ProfileModule, error) {
@@ -155,33 +236,25 @@ func resolveProfileModules(profile Profile, config *Config, processedProfiles ma
 	return resolvedModules, nil
 }
 
-func getEffectiveProjectPath(profile Profile, config *Config) string {
-	if profile.ProjectPath != "" {
-		return profile.ProjectPath
-	}
-	return config.ProjectPath
-}
+// getEffectiveModuleDeployPath determines the effective deploy path using 2-level hierarchy
+// Level 1: DeployPath in ProfileModule (most specific)
+// Level 2: DeployPath in Module definition
+// Level 3: DeployPath global (fallback)
+func getEffectiveModuleDeployPath(profileModule ProfileModule, moduleDef Module, config *Config) (string, error) {
+	varMap := buildVariableMap(config)
 
-func getEffectiveDeployPath(profile Profile, config *Config) string {
-	if profile.DeployPath != "" {
-		return profile.DeployPath
-	}
-	return config.DeployPath
-}
-
-func getEffectiveModuleDeployPath(profileModule ProfileModule, profile Profile, config *Config) string {
-	// Level 1: Module-specific deploy path (most specific)
+	// Level 1: Module-specific deploy path in ProfileModule
 	if profileModule.DeployPath != "" {
-		return profileModule.DeployPath
+		return resolveVariables(profileModule.DeployPath, varMap)
 	}
 
-	// Level 2: Profile deploy path
-	if profile.DeployPath != "" {
-		return profile.DeployPath
+	// Level 2: Deploy path in module definition
+	if moduleDef.DeployPath != "" {
+		return resolveVariables(moduleDef.DeployPath, varMap)
 	}
 
-	// Level 3: Global deploy path (least specific)
-	return config.DeployPath
+	// Level 3: Global deploy path (already resolved during loadConfig)
+	return config.DeployPath, nil
 }
 
 // ============================================================================
@@ -308,13 +381,11 @@ func runInteractiveForm(config *Config) (*FormData, error) {
 // EXECUTION FUNCTIONS
 // ============================================================================
 
-func compileModule(moduleName string, module Module, projectPath string, dryRun bool) error {
-	fullBasePath := filepath.Join(projectPath, module.BasePath)
-
+func compileModule(moduleName string, modulePath string, dryRun bool) error {
 	if dryRun {
 		fmt.Printf("[DRY-RUN] Would compile %s\n", moduleName)
 		fmt.Printf("  Command: mvn clean install -DskipTests\n")
-		fmt.Printf("  Working directory: %s\n", fullBasePath)
+		fmt.Printf("  Working directory: %s\n", modulePath)
 		return nil
 	}
 
@@ -322,13 +393,13 @@ func compileModule(moduleName string, module Module, projectPath string, dryRun 
 	fmt.Println(strings.Repeat("-", 50))
 
 	// Check if path exists
-	if _, err := os.Stat(fullBasePath); os.IsNotExist(err) {
-		return fmt.Errorf("module base path does not exist: %s", fullBasePath)
+	if _, err := os.Stat(modulePath); os.IsNotExist(err) {
+		return fmt.Errorf("module path does not exist: %s", modulePath)
 	}
 
 	// Execute Maven command
 	cmd := exec.Command("mvn", "clean", "install", "-DskipTests")
-	cmd.Dir = fullBasePath
+	cmd.Dir = modulePath
 
 	// Show Maven output in real-time
 	cmd.Stdout = os.Stdout
@@ -347,14 +418,13 @@ func compileModule(moduleName string, module Module, projectPath string, dryRun 
 	return nil
 }
 
-func copyArtifact(moduleName string, module Module, projectPath string, deployPath string, dryRun bool) error {
-	fullArtifactPath := filepath.Join(projectPath, module.ArtifactFile)
-	artifactName := filepath.Base(fullArtifactPath)
+func copyArtifact(moduleName string, artifactFilePath string, deployPath string, dryRun bool) error {
+	artifactName := filepath.Base(artifactFilePath)
 	destPath := filepath.Join(deployPath, artifactName)
 
 	if dryRun {
 		fmt.Printf("[DRY-RUN] Would copy %s\n", moduleName)
-		fmt.Printf("  Source: %s\n", fullArtifactPath)
+		fmt.Printf("  Source: %s\n", artifactFilePath)
 		fmt.Printf("  Destination: %s\n", destPath)
 		return nil
 	}
@@ -362,8 +432,8 @@ func copyArtifact(moduleName string, module Module, projectPath string, deployPa
 	fmt.Printf("[COPYING] %s...\n", moduleName)
 
 	// Check if artifact exists
-	if _, err := os.Stat(fullArtifactPath); os.IsNotExist(err) {
-		return fmt.Errorf("artifact file does not exist: %s", fullArtifactPath)
+	if _, err := os.Stat(artifactFilePath); os.IsNotExist(err) {
+		return fmt.Errorf("artifact file does not exist: %s", artifactFilePath)
 	}
 
 	// Create deploy directory if it doesn't exist
@@ -372,7 +442,7 @@ func copyArtifact(moduleName string, module Module, projectPath string, deployPa
 	}
 
 	// Copy the file
-	sourceFile, err := os.Open(fullArtifactPath)
+	sourceFile, err := os.Open(artifactFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to open source file: %w", err)
 	}
@@ -392,7 +462,7 @@ func copyArtifact(moduleName string, module Module, projectPath string, deployPa
 	return nil
 }
 
-func executeAction(selectedModules []ProfileModule, config *Config, action Action, profile Profile, projectPath string, dryRun bool) error {
+func executeAction(selectedModules []ProfileModule, config *Config, action Action, dryRun bool) error {
 	successCount := 0
 	totalCount := len(selectedModules)
 
@@ -410,19 +480,35 @@ func executeAction(selectedModules []ProfileModule, config *Config, action Actio
 			return fmt.Errorf("module not found in config: %s", profileModule.Name)
 		}
 
-		// Get the effective deploy path for this module
-		moduleDeployPath := getEffectiveModuleDeployPath(profileModule, profile, config)
+		// Build variable map
+		varMap := buildVariableMap(config)
+
+		// Resolve all paths
+		modulePath, err := resolveVariables(module.ModulePath, varMap)
+		if err != nil {
+			return fmt.Errorf("failed to resolve module_path for %s: %w", profileModule.Name, err)
+		}
+
+		artifactPath, err := resolveVariables(module.ArtifactFile, varMap)
+		if err != nil {
+			return fmt.Errorf("failed to resolve artifact_file for %s: %w", profileModule.Name, err)
+		}
+
+		deployPath, err := getEffectiveModuleDeployPath(profileModule, module, config)
+		if err != nil {
+			return fmt.Errorf("failed to resolve deploy_path for %s: %w", profileModule.Name, err)
+		}
 
 		// Compile if needed
 		if action == ActionCompileOnly || action == ActionCompileAndCopy {
-			if err := compileModule(profileModule.Name, module, projectPath, dryRun); err != nil {
+			if err := compileModule(profileModule.Name, modulePath, dryRun); err != nil {
 				return err // Stop on first error as per requirements
 			}
 		}
 
 		// Copy if needed
 		if action == ActionCopyOnly || action == ActionCompileAndCopy {
-			if err := copyArtifact(profileModule.Name, module, projectPath, moduleDeployPath, dryRun); err != nil {
+			if err := copyArtifact(profileModule.Name, artifactPath, deployPath, dryRun); err != nil {
 				return err // Stop on first error as per requirements
 			}
 		}
@@ -524,25 +610,8 @@ func main() {
 		selectedAction = formData.SelectedAction
 	}
 
-	// Find the selected profile
-	var selectedProfile *Profile
-	for _, p := range config.Profiles {
-		if p.Name == selectedProfileName {
-			selectedProfile = &p
-			break
-		}
-	}
-
-	if selectedProfile == nil {
-		fmt.Println("Error: Selected profile not found")
-		os.Exit(1)
-	}
-
-	// Get effective project path
-	projectPath := getEffectiveProjectPath(*selectedProfile, config)
-
 	// Execute action
-	if err := executeAction(selectedModules, config, Action(selectedAction), *selectedProfile, projectPath, *dryRun); err != nil {
+	if err := executeAction(selectedModules, config, Action(selectedAction), *dryRun); err != nil {
 		fmt.Printf("\nError during execution: %v\n", err)
 		os.Exit(1)
 	}

@@ -1,37 +1,36 @@
 {
-    "project_path": "/path/to/your/java/project",
-    "deploy_path": "/path/to/jboss/standalone/deployments",
+    "project_home": "/path/to/your/java/project",
+    "jboss_home": "/path/to/jboss/server",
+    "deploy_path": "$jboss_home$/standalone/deployments",
     "modules": {
         "core-ear": {
-            "base_path": "core",
-            "artifact_file": "core/ear/target/core.ear"
+            "module_path": "$project_home$/core",
+            "artifact_file": "$project_home$/core/ear/target/core.ear"
         },
         "common-jar": {
-            "base_path": "common/lib",
-            "artifact_file": "common/lib/target/common.jar"
+            "module_path": "$project_home$/common/lib",
+            "artifact_file": "$project_home$/common/lib/target/common.jar"
         },
         "utils-jar": {
-            "base_path": "utils",
-            "artifact_file": "utils/target/utils.jar"
+            "module_path": "$project_home$/utils",
+            "artifact_file": "$project_home$/utils/target/utils.jar"
         },
         "api-war": {
-            "base_path": "api",
-            "artifact_file": "api/web/target/api.war"
+            "module_path": "$project_home$/api",
+            "artifact_file": "$project_home$/api/web/target/api.war"
         },
         "services-ear": {
-            "base_path": "services",
-            "artifact_file": "services/ear/target/services.ear"
+            "module_path": "$project_home$/services",
+            "artifact_file": "$project_home$/services/ear/target/services.ear"
         },
         "reports-ear": {
-            "base_path": "reports",
-            "artifact_file": "reports/ear/target/reports.ear"
+            "module_path": "$project_home$/reports",
+            "artifact_file": "$project_home$/reports/ear/target/reports.ear"
         }
     },
     "profiles": [
         {
             "name": "BASE",
-            "project_path": "",
-            "deploy_path": "",
             "modules": [
                 {"name": "core-ear"},
                 {"name": "common-jar"},
