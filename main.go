@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ============================================================================
@@ -55,6 +57,14 @@ const (
 	ActionCopyOnly        Action = "Copy Only"
 	ActionCompileOnly     Action = "Compile Only"
 	ActionCompileAndCopy  Action = "Compile and Copy"
+)
+
+type ModuleStatus int
+
+const (
+	StatusInSync     ModuleStatus = iota // Verde - sincronizado
+	StatusOutOfSync                      // Amarillo - desincronizado
+	StatusMissing                        // Rojo - faltante
 )
 
 // ============================================================================
@@ -182,6 +192,71 @@ func validateVariables(config *Config) error {
 	config.DeployPath = resolved
 
 	return nil
+}
+
+// checkModuleStatus verifies the status of a module by comparing artifact and deployed files
+func checkModuleStatus(profileModule ProfileModule, module Module, config *Config) ModuleStatus {
+	// Build variable map for path resolution
+	varMap := buildVariableMap(config)
+
+	// Resolve artifact file path
+	artifactPath, err := resolveVariables(module.ArtifactFile, varMap)
+	if err != nil {
+		return StatusMissing
+	}
+
+	// Resolve deploy path
+	deployPath, err := getEffectiveModuleDeployPath(profileModule, module, config)
+	if err != nil {
+		return StatusMissing
+	}
+
+	// Get artifact filename and construct deployed file path
+	artifactName := filepath.Base(artifactPath)
+	deployedPath := filepath.Join(deployPath, artifactName)
+
+	// Check if artifact file exists
+	artifactInfo, errArtifact := os.Stat(artifactPath)
+	if errArtifact != nil {
+		return StatusMissing // Artifact doesn't exist
+	}
+
+	// Check if deployed file exists
+	deployedInfo, errDeployed := os.Stat(deployedPath)
+	if errDeployed != nil {
+		return StatusMissing // Deployed file doesn't exist
+	}
+
+	// Compare size
+	if artifactInfo.Size() != deployedInfo.Size() {
+		return StatusOutOfSync // Different sizes
+	}
+
+	// Compare modification time with 2 second tolerance
+	timeDiff := artifactInfo.ModTime().Sub(deployedInfo.ModTime())
+	if timeDiff < 0 {
+		timeDiff = -timeDiff
+	}
+
+	if timeDiff > 2*time.Second {
+		return StatusOutOfSync // Different times
+	}
+
+	return StatusInSync // Files match
+}
+
+// getStatusIndicator returns a colored indicator for module status
+func getStatusIndicator(status ModuleStatus) string {
+	switch status {
+	case StatusInSync:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●") // Green
+	case StatusOutOfSync:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("226")).Render("●") // Yellow
+	case StatusMissing:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("●") // Red
+	default:
+		return "○" // No color
+	}
 }
 
 func resolveProfileModules(profile Profile, config *Config, processedProfiles map[string]bool) ([]ProfileModule, error) {
@@ -316,10 +391,23 @@ func runInteractiveForm(config *Config) (*FormData, error) {
 						return []huh.Option[string]{}
 					}
 
-					// Build options with all selected by default
+					// Build options with all selected by default and status indicators
 					options := make([]huh.Option[string], len(resolvedModules))
 					for i, profileModule := range resolvedModules {
-						options[i] = huh.NewOption(profileModule.Name, profileModule.Name).Selected(true)
+						// Get module definition
+						module, exists := config.Modules[profileModule.Name]
+						if !exists {
+							continue
+						}
+
+						// Check module status
+						status := checkModuleStatus(profileModule, module, config)
+						indicator := getStatusIndicator(status)
+
+						// Create label with status indicator
+						label := fmt.Sprintf("%s %s", indicator, profileModule.Name)
+
+						options[i] = huh.NewOption(label, profileModule.Name).Selected(true)
 					}
 
 					return options
@@ -431,8 +519,9 @@ func copyArtifact(moduleName string, artifactFilePath string, deployPath string,
 
 	fmt.Printf("[COPYING] %s...\n", moduleName)
 
-	// Check if artifact exists
-	if _, err := os.Stat(artifactFilePath); os.IsNotExist(err) {
+	// Get source file info to preserve modification time
+	sourceInfo, err := os.Stat(artifactFilePath)
+	if err != nil {
 		return fmt.Errorf("artifact file does not exist: %s", artifactFilePath)
 	}
 
@@ -456,6 +545,11 @@ func copyArtifact(moduleName string, artifactFilePath string, deployPath string,
 
 	if _, err := io.Copy(destFile, sourceFile); err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)
+	}
+
+	// Preserve the modification time from the source file
+	if err := os.Chtimes(destPath, sourceInfo.ModTime(), sourceInfo.ModTime()); err != nil {
+		return fmt.Errorf("failed to preserve modification time: %w", err)
 	}
 
 	fmt.Printf("[SUCCESS] %s copied to deployments\n", moduleName)

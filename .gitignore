@@ -15,7 +15,7 @@ d4j.exe
 *.out
 *.prof
 
-# Configuration files (use config.example.json as template)
+# Configuration files
 config.json
 
 # IDE and editor files
@@ -32,3 +32,6 @@ config.json
 # Temporary files
 tmp/
 temp/
+
+# Test environment
+test-env
