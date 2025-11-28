@@ -510,14 +510,20 @@ func copyArtifact(moduleName string, artifactFilePath string, deployPath string,
 	artifactName := filepath.Base(artifactFilePath)
 	destPath := filepath.Join(deployPath, artifactName)
 
+	// Normalize paths to use native separators
+	normalizedSource := filepath.FromSlash(artifactFilePath)
+	normalizedDest := filepath.FromSlash(destPath)
+
 	if dryRun {
 		fmt.Printf("[DRY-RUN] Would copy %s\n", moduleName)
-		fmt.Printf("  Source: %s\n", artifactFilePath)
-		fmt.Printf("  Destination: %s\n", destPath)
+		fmt.Printf("  Source: %s\n", normalizedSource)
+		fmt.Printf("  Destination: %s\n", normalizedDest)
 		return nil
 	}
 
 	fmt.Printf("[COPYING] %s...\n", moduleName)
+	fmt.Printf("  Source: %s\n", normalizedSource)
+	fmt.Printf("  Destination: %s\n", normalizedDest)
 
 	// Get source file info to preserve modification time
 	sourceInfo, err := os.Stat(artifactFilePath)
@@ -552,7 +558,7 @@ func copyArtifact(moduleName string, artifactFilePath string, deployPath string,
 		return fmt.Errorf("failed to preserve modification time: %w", err)
 	}
 
-	fmt.Printf("[SUCCESS] %s copied to deployments\n", moduleName)
+	fmt.Printf("[SUCCESS] %s copied successfully\n", moduleName)
 	return nil
 }
 
